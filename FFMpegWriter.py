@@ -1,0 +1,219 @@
+import os
+import shutil
+import base64
+
+from subprocess import Popen, PIPE
+
+import matplotlib.pyplot as plt
+import imageio.v2 as imageio
+
+import hcipy
+from hcipy.config import Configuration
+
+class FFMpegWriter(object):
+    '''A writer of video files from Matplotlib figures.
+
+    This class uses FFMpeg as the basis for writing frames to a video file.
+
+    Parameters
+    ----------
+    filename : string
+        The filename of the generated video file.
+    codec : string
+        The codec for FFMpeg to use. If it is not given, a suitable codec
+        will be guessed based on the file extension.
+    framerate : integer
+        The number of frames per second of the generated video file.
+    quality : string
+        The quality of the encoding for lossy codecs. Please refer to FFMpeg documentation.
+    preset : string
+        The preset for the quality of the encoding. Please refer to FFMpeg documentation.
+
+    Raises
+    ------
+    ValueError
+        If the codec was not given and could not be guessed based on the file extension.
+    RuntimeError
+        If something went wrong during initialization of the call to FFMpeg. Most likely,
+        FFMpeg is not installed and/or not available from the commandline.
+    '''
+    def __init__(self, filename, codec=None, framerate=24, quality=None, preset=None):
+        if codec is None:
+            extension = os.path.splitext(filename)[1]
+            if extension == '.mp4' or extension == '.avi':
+                codec = 'h264'
+            elif extension == '.webm':
+                codec = 'libvpx-vp9'
+            else:
+                raise ValueError('No codec was given and it could not be guessed based on the file extension.')
+
+        self.is_closed = True
+        self.filename = filename
+        self.codec = codec
+        self.framerate = framerate
+
+        ffmpeg_path = Configuration().plotting.ffmpeg_path
+        if ffmpeg_path is None:
+            ffmpeg_path = 'ffmpeg'
+
+        if shutil.which(ffmpeg_path) is None:
+            raise RuntimeError('ffmpeg was not found. Did you install it and is it accessible, either from PATH or from the HCIPy configuration file?')
+
+        if codec == 'h264':
+            if quality is None:
+                quality = 10
+
+            if preset is not None:
+                preset_command = ['-preset', preset]
+            else:
+                preset_command = []
+
+            command = [
+                ffmpeg_path, '-y', '-nostats', '-f', 'image2pipe',
+                '-vcodec', 'png', '-r', str(framerate), '-threads', '0', '-i', '-',
+                '-vcodec', 'h264', '-pix_fmt', 'yuv420p', *preset_command, '-r',
+                str(framerate), '-crf', str(quality), filename
+            ]
+        elif codec == 'mpeg4':
+            if quality is None:
+                quality = 4
+
+            command = [
+                ffmpeg_path, '-y', '-nostats', '-v', 'quiet', '-f', 'image2pipe',
+                '-vcodec', 'png', '-r', str(framerate), '-threads', '0', '-i', '-',
+                '-vcodec', 'mpeg4', '-q:v', str(quality), '-r', str(framerate), filename
+            ]
+        elif codec == 'libvpx-vp9':
+            if quality is None:
+                quality = 30
+
+            command = [
+                ffmpeg_path, '-y', '-nostats', '-v', 'quiet', '-f', 'image2pipe',
+                '-vcodec', 'png', '-r', str(framerate), '-threads', '0', '-i', '-'
+            ]
+
+            if quality < 0:
+                command.extend(['-vcodec', 'libvpx-vp9', '-lossless', '1', '-r', str(framerate), filename])
+            else:
+                command.extend(['-vcodec', 'libvpx-vp9', '-crf', str(quality), '-b:v', '0', '-r', str(framerate), filename])
+        else:
+            raise ValueError('Codec unknown.')
+
+        try:
+            self.p = Popen(command, stdin=PIPE)
+        except OSError:
+            raise RuntimeError('Something went wrong when opening FFMpeg.')
+
+        self.is_closed = False
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            import warnings
+            warnings.warn('Something went wrong while closing FFMpeg...', RuntimeWarning)
+
+    def add_frame(self, fig=None, data=None, cmap=None, dpi=None):
+        '''Add a frame to the animation.
+
+        Parameters
+        ----------
+        fig : Matplotlib figure
+            The Matplotlib figure acting as the animation frame.
+        data : ndarray
+            The image data array acting as the animation frame.
+        cmap : Matplotlib colormap
+            The optional colormap for the image data.
+        dpi : integer or None
+            The number of dots per inch with which to save the matplotlib figure.
+            If it is not given, the default Matplotlib dpi will be used.
+
+        Raises
+        ------
+        RuntimeError
+            If the function was called on a closed FFMpegWriter.
+        '''
+        # if self.is_closed:
+        #     raise RuntimeError('Attempted to add a frame to a closed FFMpegWriter.')
+
+        # if data is None:
+        #     if fig is None:
+        #         fig = plt.gcf()
+
+        #     facecolor = list(fig.get_facecolor())
+        #     facecolor[3] = 1
+
+        #     fig.savefig(self.p.stdin, format='png', transparent=False, dpi=dpi, facecolor=facecolor)
+        # else:
+        #     img = _data_to_img(data, cmap)
+
+        #     imageio.imwrite(self.p.stdin, img, format='png')
+        if self.is_closed:
+            raise RuntimeError('Attempted to add a frame to a closed FFMpegWriter.')
+
+        try:
+            if data is None:
+                if fig is None:
+                    fig = plt.gcf()
+
+                facecolor = list(fig.get_facecolor())
+                facecolor[3] = 1  # ensure opaque background
+
+                fig.savefig(self.p.stdin, format='png', transparent=False, dpi=dpi, facecolor=facecolor)
+            else:
+                img = _data_to_img(data, cmap)
+                imageio.imwrite(self.p.stdin, img, format='png')
+            # Flush the pipe to ensure the data is actually sent to ffmpeg
+            # prev, ffmpeg subprocess is closing its input (stdin) before all the frame data is sent
+            # bcsffmpeg encountered an issue (or didn’t flush its input properly) and exited
+            self.p.stdin.flush()
+        except BrokenPipeError as e:
+            # This exception is raised when ffmpeg has already terminated
+            raise RuntimeError("Broken pipe error writing frame") from e
+
+    
+    def close(self):
+        '''Close the animation writer and finish the video file.
+
+        This closes the FFMpeg call.
+        '''
+        if not self.is_closed:
+            self.p.stdin.close()
+            self.p.wait()
+            self.p = None
+        self.is_closed = True
+
+    def _repr_html_(self):
+        '''Get an HTML representation of the generated video.
+
+        Helper function for Jupyter notebooks. The video will be inline embedded in an
+        HTML5 video tag using base64 encoding. This is not very efficient, so only use this
+        for small video files.
+
+        The FFMpegWriter must be closed for this function to work.
+
+        Raises
+        ------
+        RuntimeError
+            If the call was made on an open FFMpegWriter.
+        '''
+        if not self.is_closed:
+            raise RuntimeError('Attempted to show the generated movie on an opened FFMpegWriter.')
+
+        video = open(self.filename, 'rb').read()
+        video = base64.b64encode(video).decode('ascii').rstrip()
+
+        if self.filename.endswith('.mp4'):
+            mimetype = 'video/mp4'
+        elif self.filename.endswith('.webm'):
+            mimetype = 'video/webm'
+        elif self.filename.endswith('.avi'):
+            mimetype = 'video/avi'
+        else:
+            raise RuntimeError('Mimetype could not be guessed.')
+
+        output = '''<video controls><source src="data:{0};base64,{1}" type="{0}">Your browser does not support the video tag.</video>'''
+        output = output.format(mimetype, video)
+
+        return output
+
