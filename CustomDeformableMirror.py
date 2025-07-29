@@ -88,92 +88,7 @@ def make_circular_actuator_positions(num_rings, points_first_ring, actuator_spac
     return grid
 
 
-# def make_triangular_actuator_positions(num_rings, actuator_spacing, 
-#                                        x_tilt=0, y_tilt=0, z_tilt=0):
-#     '''Generate actuator positions in a triangular layout with interleaved layers.
-    
-#     For a triangular layout, the center actuator is at (0,0). For each ring
-#     (r = 1, 2, ... num_rings), we form an equilateral triangle with side length 
-#     L = r × actuator_spacing. Actuators are placed equally spaced along the perimeter,
-#     so that there are 3r actuators on ring r.
-    
-#     To interleave the layers, an offset of actuator_spacing/2 is added to the positions 
-#     in even-numbered rings.
-    
-#     Parameters
-#     ----------
-#     num_rings : integer
-#         The number of triangular rings (not counting the center actuator).
-#     actuator_spacing : scalar
-#         The spacing between actuators along the triangle sides (which equals the side 
-#         length for the first ring).
-#     x_tilt, y_tilt, z_tilt : scalar
-#         The tilts/rotation angles for the DM in radians.
-    
-#     Returns
-#     -------
-#     Grid
-#         The actuator positions arranged in a triangular layout.
-#     '''
-#     points = [(0.0, 0.0)]  # add the center actuator
-    
-#     for ring in range(1, num_rings + 1):
-#         # Compute side length of the triangle for this ring.
-#         L = ring * actuator_spacing  
-#         # Number of actuators on this ring (one per vertex for ring 1, and increasing linearly).
-#         num_points = 3 * ring
-        
-#         # For an equilateral triangle centered at (0,0), the distance from the center to a vertex is:
-#         R = L / np.sqrt(3)  # Alternatively, R = (sqrt(3)/3) * L
-        
-#         # Define the three vertices; here we set the first vertex at 90° (pi/2 radians)
-#         theta0 = np.pi / 2
-#         theta1 = theta0 - 2 * np.pi / 3
-#         theta2 = theta0 - 4 * np.pi / 3
-#         v0 = np.array([R * np.cos(theta0), R * np.sin(theta0)])
-#         v1 = np.array([R * np.cos(theta1), R * np.sin(theta1)])
-#         v2 = np.array([R * np.cos(theta2), R * np.sin(theta2)])
-#         vertices = [v0, v1, v2]
-        
-#         # For interleaving: even-numbered rings get an offset of half the actuator_spacing.
-#         offset = actuator_spacing / 2 if (ring % 2 == 0) else 0
-        
-#         # The total perimeter of the triangle is 3L.
-#         perimeter = 3 * L
-        
-#         # Place actuators along the perimeter.
-#         for j in range(num_points):
-#             # Compute the distance along the perimeter, adding the offset.
-#             d = (j * actuator_spacing + offset) % perimeter
-#             # Determine on which edge the actuator falls.
-#             edge = int(np.floor(d / L)) % 3
-#             # Compute the local fraction along the edge.
-#             t = (d % L) / L
-#             # Linearly interpolate between the vertices.
-#             start = vertices[edge]
-#             end = vertices[(edge + 1) % 3]
-#             pos = (1 - t) * start + t * end
-#             points.append(tuple(pos))
-    
-#     points = np.array(points)
-    
-#     # Apply tilt scaling: x coordinate is scaled by cos(y_tilt) and y coordinate by cos(x_tilt)
-#     points[:, 0] *= np.cos(y_tilt)
-#     points[:, 1] *= np.cos(x_tilt)
-    
-#     # Apply rotation about the z-axis if needed.
-#     if z_tilt != 0:
-#         c = np.cos(z_tilt)
-#         s = np.sin(z_tilt)
-#         x_rot = c * points[:, 0] - s * points[:, 1]
-#         y_rot = s * points[:, 0] + c * points[:, 1]
-#         points[:, 0] = x_rot
-#         points[:, 1] = y_rot
-    
-#     from hcipy.field.coordinates import UnstructuredCoords
-#     from hcipy.field.cartesian_grid import CartesianGrid
-#     grid = CartesianGrid(UnstructuredCoords([points[:, 0], points[:, 1]]))
-#     return grid
+
 def make_triangular_actuator_positions(num_rings, actuator_spacing,
                                        x_tilt=0, y_tilt=0, z_tilt=0):
     '''
@@ -271,7 +186,8 @@ def make_gaussian_influence_functions(pupil_grid, num_rings, points_first_ring,
     # Filter to circular pupil
     max_radius = num_rings * actuator_spacing
     x, y = actuator_positions.points.T
-    mask = np.sqrt(x**2 + y**2) <= max_radius
+    margin = actuator_spacing / 2  # Margin to include the outermost ring
+    mask = np.sqrt(x**2 + y**2) <= (max_radius+margin)
     filtered_actuator_positions = actuator_positions.subset(mask)
 
     # Compute sigma from the actuator_spacing and crosstalk.
